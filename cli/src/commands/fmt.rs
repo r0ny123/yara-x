@@ -103,89 +103,92 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
 
     w.max_depth(*recursive.unwrap_or(&0));
 
-    let state = w.walk(
-        FmtState::new(check),
-        // Initialization
-        |_, _| {},
-        // Action
-        |state, output, file_path, _| {
-            let input = fs::read(file_path.clone())
-                .with_context(|| {
-                    format!("can not read `{}`", file_path.display())
-                })
-                .unwrap();
+    let state = w
+        .walk(
+            FmtState::new(check),
+            // Initialization
+            |_, _| {},
+            // Action
+            |state, output, file_path, _| {
+                let input = fs::read(file_path.clone())
+                    .with_context(|| {
+                        format!("can not read `{}`", file_path.display())
+                    })
+                    .unwrap();
 
-            let result = if state.check_mode {
-                formatter.format(input.as_slice(), io::sink())
-            } else {
-                let mut formatted = Cursor::new(Vec::with_capacity(input.len()));
-                match formatter.format(input.as_slice(), &mut formatted) {
-                    Ok(true) => {
-                        formatted.seek(SeekFrom::Start(0))?;
-                        let mut output_file = File::create(file_path.as_path())?;
-                        io::copy(&mut formatted, &mut output_file)?;
-                        Ok(true)
+                let result = if state.check_mode {
+                    formatter.format(input.as_slice(), io::sink())
+                } else {
+                    let mut formatted =
+                        Cursor::new(Vec::with_capacity(input.len()));
+                    match formatter.format(input.as_slice(), &mut formatted) {
+                        Ok(true) => {
+                            formatted.seek(SeekFrom::Start(0))?;
+                            let mut output_file =
+                                File::create(file_path.as_path())?;
+                            io::copy(&mut formatted, &mut output_file)?;
+                            Ok(true)
+                        }
+                        Ok(false) => Ok(false),
+                        Err(e) => Err(e),
                     }
-                    Ok(false) => Ok(false),
-                    Err(e) => Err(e),
-                }
-            };
+                };
 
-            match result {
-                Ok(true) => {
-                    state.files_modified.fetch_add(1, Ordering::Relaxed);
-                    output.send(Message::Info(format!(
-                        "[ {} ] {}",
-                        if state.check_mode {
-                            "NEED FMT".paint(Yellow).bold()
+                match result {
+                    Ok(true) => {
+                        state.files_modified.fetch_add(1, Ordering::Relaxed);
+                        output.send(Message::Info(format!(
+                            "[ {} ] {}",
+                            if state.check_mode {
+                                "NEED FMT".paint(Yellow).bold()
+                            } else {
+                                "MODIFIED".paint(Yellow).bold()
+                            },
+                            file_path.display()
+                        )))?;
+                    }
+                    Ok(false) => {
+                        state.files_ok.fetch_add(1, Ordering::Relaxed);
+                        output.send(Message::Info(format!(
+                            "[   {} ] {}",
+                            "OK".paint(Green).bold(),
+                            file_path.display()
+                        )))?;
+                    }
+                    Err(err) => {
+                        state.errors.fetch_add(1, Ordering::Relaxed);
+                        let err_msg = if io::stdout().is_tty() {
+                            err.to_string()
                         } else {
-                            "MODIFIED".paint(Yellow).bold()
-                        },
-                        file_path.display()
-                    )))?;
-                }
-                Ok(false) => {
-                    state.files_ok.fetch_add(1, Ordering::Relaxed);
-                    output.send(Message::Info(format!(
-                        "[   {} ] {}",
-                        "OK".paint(Green).bold(),
-                        file_path.display()
-                    )))?;
-                }
-                Err(err) => {
-                    state.errors.fetch_add(1, Ordering::Relaxed);
-                    let err_msg = if io::stdout().is_tty() {
-                        err.to_string()
-                    } else {
-                        format!("{:#}", err)
-                    };
-                    output.send(Message::Info(format!(
-                        "[ {} ] {}\n{}",
-                        "FAIL".paint(Red).bold(),
-                        file_path.display(),
-                        err_msg,
-                    )))?;
-                }
-            };
+                            format!("{:#}", err)
+                        };
+                        output.send(Message::Info(format!(
+                            "[ {} ] {}\n{}",
+                            "FAIL".paint(Red).bold(),
+                            file_path.display(),
+                            err_msg,
+                        )))?;
+                    }
+                };
 
-            Ok(())
-        },
-        // Finalization
-        |_, _| {},
-        // Walk done
-        |_| {},
-        // Error handling
-        |err, output| {
-            let _ = output.send(Message::Error(format!(
-                "{} {}",
-                "error:".paint(Red).bold(),
-                err
-            )));
+                Ok(())
+            },
+            // Finalization
+            |_, _| {},
+            // Walk done
+            |_| {},
+            // Error handling
+            |err, output| {
+                let _ = output.send(Message::Error(format!(
+                    "{} {}",
+                    "error:".paint(Red).bold(),
+                    err
+                )));
 
-            Ok(())
-        },
-    )
-    .unwrap();
+                Ok(())
+            },
+        )
+        .unwrap();
 
     // Exit code is 1 if errors were found or files were modified/need formatting.
     if state.errors.load(Ordering::Relaxed) > 0
@@ -231,7 +234,11 @@ impl Component for FmtState {
 
                 let modified = format!(
                     "{}: {}. ",
-                    if self.check_mode { "need formatting" } else { "modified" },
+                    if self.check_mode {
+                        "need formatting"
+                    } else {
+                        "modified"
+                    },
                     self.files_modified.load(Ordering::Relaxed)
                 );
 
