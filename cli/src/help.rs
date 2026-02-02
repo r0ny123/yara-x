@@ -86,6 +86,28 @@ pub const FMT_CHECK_MODE: &str = r#"Run in 'check' mode
 Doesn't modify the files. Exits with 0 if files are formatted correctly. Exits
 with 1 if formatting is required."#;
 
+pub const FMT_FILTER_LONG_HELP: &str = r#"Only format files that match the given pattern
+
+Patterns can contains the following wildcards:
+
+?      matches any single character.
+
+*      matches any sequence of characters, except the path separator.
+
+**     matches any sequence of characters, including the path separator.
+
+[...]  matches any character inside the brackets. Can also specify ranges of
+       characters (e.g. [0-9], [a-z])
+
+[!...] is the negation of [...]
+
+This option can be used more than once with different patterns. In such cases
+files matching any of the patterns will be formatted.
+
+When no filter is specified, the following ones are used by default:
+
+--filter='**/*.yara' --filter='**/*.yar'"#;
+
 pub const FMT_TAB_SIZE: &str = r#"Tab size (in spaces) used in source files
 
 If the input contains tab characters, the formatter uses this value to determine how
