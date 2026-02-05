@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fs::File;
 use std::io::{Cursor, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -8,13 +9,14 @@ use yara_x_fmt::{Formatter, Indentation};
 
 use crate::config::Config;
 use crate::help;
+use crate::walk::Walker;
 
 pub fn fmt() -> Command {
     super::command("fmt")
         .about("Format YARA source files")
         .arg(
             arg!(<FILE>)
-                .help("Path to YARA source file")
+                .help("Path to YARA source file or directory")
                 .required(true)
                 .value_parser(value_parser!(PathBuf))
                 .action(ArgAction::Append),
@@ -30,12 +32,21 @@ pub fn fmt() -> Command {
                 .default_value("4")
                 .value_parser(value_parser!(usize)),
         )
+        .arg(
+            arg!(-r - -"recursive"[MAX_DEPTH])
+                .help("Walk directories recursively up to a given depth")
+                .long_help(help::RECURSIVE_LONG_HELP)
+                .default_missing_value("1000")
+                .require_equals(true)
+                .value_parser(value_parser!(usize)),
+        )
 }
 
 pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
     let files = args.get_many::<PathBuf>("FILE").unwrap();
     let check = args.get_flag("check");
     let tab_size = args.get_one::<usize>("tab-size").unwrap();
+    let recursive = args.get_one::<usize>("recursive");
 
     let formatter = Formatter::new()
         .input_tab_size(*tab_size)
@@ -56,26 +67,65 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
             config.fmt.rule.empty_line_after_section_header,
         );
 
-    let mut modified = false;
+    let modified = Cell::new(false);
+    let has_errors = Cell::new(false);
 
-    for file in files {
-        let input = fs::read(file.as_path())?;
-        modified = if check {
-            formatter.format(input.as_slice(), io::sink())?
+    for path in files {
+        let mut walker = Walker::path(path);
+
+        walker.filter("**/*.yar").filter("**/*.yara");
+
+        if let Some(max_depth) = recursive {
+            walker.max_depth(*max_depth);
         } else {
-            let mut formatted = Cursor::new(Vec::with_capacity(input.len()));
-            if formatter.format(input.as_slice(), &mut formatted)? {
-                formatted.seek(SeekFrom::Start(0))?;
-                let mut output_file = File::create(file.as_path())?;
-                io::copy(&mut formatted, &mut output_file)?;
-                true
-            } else {
-                false
-            }
-        } || modified;
+            walker.max_depth(0);
+        }
+
+        let _ = walker.walk(
+            |file_path| {
+                let input = fs::read(file_path)?;
+                let result = if check {
+                    formatter.format(input.as_slice(), io::sink())
+                } else {
+                    let mut formatted = Cursor::new(Vec::with_capacity(input.len()));
+                    match formatter.format(input.as_slice(), &mut formatted) {
+                        Ok(changed) => {
+                            if changed {
+                                formatted.seek(SeekFrom::Start(0))?;
+                                let mut output_file = File::create(file_path)?;
+                                io::copy(&mut formatted, &mut output_file)?;
+                                Ok(true)
+                            } else {
+                                Ok(false)
+                            }
+                        }
+                        Err(err) => Err(err),
+                    }
+                };
+
+                match result {
+                    Ok(changed) => {
+                        if changed {
+                            modified.set(true);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("error: {}", err);
+                        has_errors.set(true);
+                    }
+                }
+
+                Ok(())
+            },
+            |err| {
+                eprintln!("error: {}", err);
+                has_errors.set(true);
+                Ok(())
+            },
+        );
     }
 
-    if modified {
+    if modified.get() || has_errors.get() {
         process::exit(1)
     }
 
