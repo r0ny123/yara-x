@@ -87,7 +87,8 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
                 let result = if check {
                     formatter.format(input.as_slice(), io::sink())
                 } else {
-                    let mut formatted = Cursor::new(Vec::with_capacity(input.len()));
+                    let mut formatted =
+                        Cursor::new(Vec::with_capacity(input.len()));
                     match formatter.format(input.as_slice(), &mut formatted) {
                         Ok(changed) => {
                             if changed {
