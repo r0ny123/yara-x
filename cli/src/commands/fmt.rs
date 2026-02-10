@@ -194,35 +194,6 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
     if state.errors.load(Ordering::Relaxed) > 0
         || state.files_modified.load(Ordering::Relaxed) > 0
     {
-    let mut modified_files: Vec<&PathBuf> = Vec::new();
-
-    for file in files {
-        let input = fs::read(file.as_path())?;
-        let file_modified = if check {
-            formatter.format(input.as_slice(), io::sink())?
-        } else {
-            let mut formatted = Cursor::new(Vec::with_capacity(input.len()));
-            if formatter.format(input.as_slice(), &mut formatted)? {
-                formatted.seek(SeekFrom::Start(0))?;
-                let mut output_file = File::create(file.as_path())?;
-                io::copy(&mut formatted, &mut output_file)?;
-                true
-            } else {
-                false
-            }
-        };
-
-        if file_modified {
-            modified_files.push(file);
-        }
-    }
-
-    if !modified_files.is_empty() {
-        if check {
-            for file in &modified_files {
-                eprintln!("{}", file.display());
-            }
-        }
         process::exit(1)
     }
 
