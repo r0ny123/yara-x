@@ -24,6 +24,22 @@ fn fmt() {
 }
 
 #[test]
+fn fmt_check_shows_filenames() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_file = temp_dir.child("rule.yar");
+
+    input_file.write_str("rule test { condition: true }").unwrap();
+
+    Command::new(cargo_bin!("yr"))
+        .arg("fmt")
+        .arg("--check")
+        .arg(input_file.path())
+        .assert()
+        .stderr(predicate::str::contains("rule.yar"))
+        .code(1);
+}
+
+#[test]
 fn utf8_error() {
     let temp_dir = TempDir::new().unwrap();
     let input_file = temp_dir.child("rule.yar");
