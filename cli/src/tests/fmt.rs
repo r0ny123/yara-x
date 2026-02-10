@@ -35,7 +35,7 @@ fn fmt_check_shows_filenames() {
         .arg("--check")
         .arg(input_file.path())
         .assert()
-        .stderr(predicate::str::contains("rule.yar"))
+        .stdout(predicate::str::contains("rule.yar"))
         .code(1);
 }
 
