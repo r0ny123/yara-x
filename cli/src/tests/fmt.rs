@@ -93,17 +93,19 @@ fn fmt_directory_with_filter() {
     let temp_dir = TempDir::new().unwrap();
 
     // Create files with different extensions
-    let yar_file = temp_dir.child("rule.yar");
-    let txt_file = temp_dir.child("rule.txt");
+    // Use unique prefix to avoid glob expansion by `wild` crate on Windows
+    // matching files in the repo's working directory
+    let yar_file = temp_dir.child("fmttest_rule.yar");
+    let txt_file = temp_dir.child("fmttest_rule.txt");
 
     yar_file.write_str("rule test1 { condition: true }").unwrap();
     txt_file.write_str("rule test2 { condition: true }").unwrap();
 
-    // Format only .yar files
+    // Format only .yar files using a pattern that won't match repo files
     Command::new(cargo_bin!("yr"))
         .arg("fmt")
         .arg("--filter")
-        .arg("**/*.yar")
+        .arg("**/fmttest_*.yar")
         .arg(temp_dir.path())
         .assert()
         .code(1); // .yar file modified
