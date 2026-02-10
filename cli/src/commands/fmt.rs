@@ -162,10 +162,11 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
                     Err(err) => {
                         state.errors.fetch_add(1, Ordering::Relaxed);
                         let err_msg = if io::stdout().is_tty() {
-                            err.to_string()
-                        } else {
                             format!("{:#}", err)
+                        } else {
+                            err.to_string()
                         };
+
                         output.send(Message::Info(format!(
                             "[ {} ] {}\n{}",
                             "FAIL".paint(Red).bold(),
