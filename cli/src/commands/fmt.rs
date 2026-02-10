@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{Cursor, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::{fs, io, process};
 
 use anyhow::Context;
@@ -103,6 +104,8 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
 
     w.max_depth(*recursive.unwrap_or(&0));
 
+    let walker_errors = Arc::new(AtomicUsize::new(0));
+
     let state = w
         .walk(
             FmtState::new(check),
@@ -110,29 +113,34 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
             |_, _| {},
             // Action
             |state, output, file_path, _| {
-                let input = fs::read(file_path.clone())
+                let result = fs::read(file_path.clone())
                     .with_context(|| {
                         format!("can not read `{}`", file_path.display())
                     })
-                    .unwrap();
-
-                let result = if state.check_mode {
-                    formatter.format(input.as_slice(), io::sink())
-                } else {
-                    let mut formatted =
-                        Cursor::new(Vec::with_capacity(input.len()));
-                    match formatter.format(input.as_slice(), &mut formatted) {
-                        Ok(true) => {
-                            formatted.seek(SeekFrom::Start(0))?;
-                            let mut output_file =
-                                File::create(file_path.as_path())?;
-                            io::copy(&mut formatted, &mut output_file)?;
-                            Ok(true)
+                    .and_then(|input| {
+                        if state.check_mode {
+                            formatter.format(input.as_slice(), io::sink())
+                        } else {
+                            let mut formatted =
+                                Cursor::new(Vec::with_capacity(input.len()));
+                            match formatter
+                                .format(input.as_slice(), &mut formatted)
+                            {
+                                Ok(true) => {
+                                    formatted.seek(SeekFrom::Start(0))?;
+                                    let mut output_file =
+                                        File::create(file_path.as_path())?;
+                                    io::copy(
+                                        &mut formatted,
+                                        &mut output_file,
+                                    )?;
+                                    Ok(true)
+                                }
+                                Ok(false) => Ok(false),
+                                Err(e) => Err(e),
+                            }
                         }
-                        Ok(false) => Ok(false),
-                        Err(e) => Err(e),
-                    }
-                };
+                    });
 
                 match result {
                     Ok(true) => {
@@ -178,20 +186,25 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
             // Walk done
             |_| {},
             // Error handling
-            |err, output| {
-                let _ = output.send(Message::Error(format!(
-                    "{} {}",
-                    "error:".paint(Red).bold(),
-                    err
-                )));
+            {
+                let walker_errors = walker_errors.clone();
+                move |err, output| {
+                    walker_errors.fetch_add(1, Ordering::Relaxed);
+                    let _ = output.send(Message::Error(format!(
+                        "{} {}",
+                        "error:".paint(Red).bold(),
+                        err
+                    )));
 
-                Ok(())
+                    Ok(())
+                }
             },
         )
         .unwrap();
 
     // Exit code is 1 if errors were found or files were modified/need formatting.
     if state.errors.load(Ordering::Relaxed) > 0
+        || walker_errors.load(Ordering::Relaxed) > 0
         || state.files_modified.load(Ordering::Relaxed) > 0
     {
         process::exit(1)
