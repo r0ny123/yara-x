@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io::{Cursor, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::{fs, io, process};
 
 use anyhow::Context;
@@ -104,7 +103,7 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
 
     w.max_depth(*recursive.unwrap_or(&0));
 
-    let walker_errors = Arc::new(AtomicUsize::new(0));
+    let walker_errors = AtomicUsize::new(0);
 
     let state = w
         .walk(
@@ -113,34 +112,31 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
             |_, _| {},
             // Action
             |state, output, file_path, _| {
-                let result = fs::read(file_path.clone())
-                    .with_context(|| {
-                        format!("can not read `{}`", file_path.display())
-                    })
-                    .and_then(|input| {
-                        if state.check_mode {
-                            formatter.format(input.as_slice(), io::sink())
-                        } else {
-                            let mut formatted =
-                                Cursor::new(Vec::with_capacity(input.len()));
-                            match formatter
-                                .format(input.as_slice(), &mut formatted)
-                            {
-                                Ok(true) => {
-                                    formatted.seek(SeekFrom::Start(0))?;
-                                    let mut output_file =
-                                        File::create(file_path.as_path())?;
-                                    io::copy(
-                                        &mut formatted,
-                                        &mut output_file,
-                                    )?;
-                                    Ok(true)
-                                }
-                                Ok(false) => Ok(false),
-                                Err(e) => Err(e),
+                let result = (|| -> anyhow::Result<bool> {
+                    let input =
+                        fs::read(file_path.clone()).with_context(|| {
+                            format!("can not read `{}`", file_path.display())
+                        })?;
+
+                    if state.check_mode {
+                        Ok(formatter.format(input.as_slice(), io::sink())?)
+                    } else {
+                        let mut formatted =
+                            Cursor::new(Vec::with_capacity(input.len()));
+                        match formatter
+                            .format(input.as_slice(), &mut formatted)?
+                        {
+                            true => {
+                                formatted.seek(SeekFrom::Start(0))?;
+                                let mut output_file =
+                                    File::create(file_path.as_path())?;
+                                io::copy(&mut formatted, &mut output_file)?;
+                                Ok(true)
                             }
+                            false => Ok(false),
                         }
-                    });
+                    }
+                })();
 
                 match result {
                     Ok(true) => {
@@ -186,18 +182,15 @@ pub fn exec_fmt(args: &ArgMatches, config: &Config) -> anyhow::Result<()> {
             // Walk done
             |_| {},
             // Error handling
-            {
-                let walker_errors = walker_errors.clone();
-                move |err, output| {
-                    walker_errors.fetch_add(1, Ordering::Relaxed);
-                    let _ = output.send(Message::Error(format!(
-                        "{} {}",
-                        "error:".paint(Red).bold(),
-                        err
-                    )));
+            |err, output| {
+                walker_errors.fetch_add(1, Ordering::Relaxed);
+                let _ = output.send(Message::Error(format!(
+                    "{} {}",
+                    "error:".paint(Red).bold(),
+                    err
+                )));
 
-                    Ok(())
-                }
+                Ok(())
             },
         )
         .unwrap();
